@@ -42,10 +42,10 @@ class NotificationBridge : NotificationListenerService() {
             repo.settings.lastListenerError = "An app posted a notification that could not be read."
             return
         }
-        repo.io.execute {
+        repo.captureWhileAwake {
             try {
-                if (!repo.settings.enabled || repo.settings.rules()[sbn.packageName]?.enabled != true) return@execute
-                val currentRule = repo.settings.rules()[sbn.packageName] ?: return@execute
+                if (!repo.settings.enabled || repo.settings.rules()[sbn.packageName]?.enabled != true) return@captureWhileAwake
+                val currentRule = repo.settings.rules()[sbn.packageName] ?: return@captureWhileAwake
                 parsed.forEach { captured ->
                     if (currentRule.accepts(captured.message.title, captured.message.body)) {
                         val hasMessages = notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES, Bundle::class.java)?.isNotEmpty() == true

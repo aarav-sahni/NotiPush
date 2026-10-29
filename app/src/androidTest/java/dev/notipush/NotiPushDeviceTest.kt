@@ -84,6 +84,8 @@ class NotiPushDeviceTest {
         compose.onNodeWithText("Apps", substring = false).performClick(); capture("apps")
         compose.onNodeWithText("Activity", substring = false).performClick(); capture("activity")
         compose.onNodeWithText("Setup", substring = false).performClick(); capture("setup")
+        compose.onNodeWithText("Times only; no notification text is kept here.", substring = true).performScrollTo()
+        capture("background")
     }
 
     private fun Bitmap.useBitmap(action: (Bitmap) -> Unit) { try { action(this) } finally { recycle() } }

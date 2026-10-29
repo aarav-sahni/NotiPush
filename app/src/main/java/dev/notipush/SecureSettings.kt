@@ -21,6 +21,9 @@ class Vault {
             init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                // Works after the first post-reboot unlock, including subsequent screen locks.
+                .setUserAuthenticationRequired(false)
+                .setUnlockedDeviceRequired(false)
                 .setRandomizedEncryptionRequired(true).build())
         }.generateKey()
     }
@@ -57,6 +60,16 @@ class SecureSettings(context: Context, private val vault: Vault) {
     var lastListenerError: String
         get() = preferences.getString("listenerError", "") ?: ""
         set(value) { preferences.edit().putString("listenerError", value).apply() }
+    val lastCaptureAt get() = preferences.getLong("lastCaptureAt", 0)
+    val lastCaptureLocked get() = preferences.getBoolean("lastCaptureLocked", false)
+    val lastDeliveryAt get() = preferences.getLong("lastDeliveryAt", 0)
+    val lastDeliveryLocked get() = preferences.getBoolean("lastDeliveryLocked", false)
+    fun recordCapture(locked: Boolean) {
+        preferences.edit().putLong("lastCaptureAt", System.currentTimeMillis()).putBoolean("lastCaptureLocked", locked).apply()
+    }
+    fun recordDelivery(locked: Boolean) {
+        preferences.edit().putLong("lastDeliveryAt", System.currentTimeMillis()).putBoolean("lastDeliveryLocked", locked).apply()
+    }
     fun destination(): Destination {
         val encrypted = preferences.getString("destination", null) ?: return Destination()
         val data = JSONObject(vault.decrypt(encrypted))

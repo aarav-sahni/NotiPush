@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3 — 2026-10-29
+
+- Added immediate forwarding from the notification listener instead of waiting for a scheduled job.
+- Added short, time-limited CPU wake locks and retained the encrypted WorkManager retry queue.
+- Shared delivery coordination prevents concurrent live/retry requests for the same queued message.
+- Added an explicit battery exemption request, exemption status, and OnePlus background-activity guidance.
+- Added capture/acceptance timestamps with screen-off/locked status, without retaining message text.
+- Added concurrency, cancellation, retry, wake-lock cleanup, and forced-Doze device regression coverage.
+- Expanded setup, troubleshooting, contribution, and release documentation; added GitHub Actions checks.
+
 ## 1.0.2 — 2026-10-29
 
 - Fixed a minified-release startup crash caused by removal of WorkManager's generated Room database constructor.

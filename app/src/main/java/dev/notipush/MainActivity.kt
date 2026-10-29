@@ -1,5 +1,6 @@
 package dev.notipush
 
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
@@ -86,7 +87,12 @@ private data class UiSnapshot(
     val stats: DeliveryStats = DeliveryStats(),
     val history: List<Delivery> = emptyList(),
     val ongoing: Boolean = false,
-    val listenerError: String = ""
+    val listenerError: String = "",
+    val batteryExempt: Boolean = false,
+    val lastCaptureAt: Long = 0,
+    val lastCaptureLocked: Boolean = false,
+    val lastDeliveryAt: Long = 0,
+    val lastDeliveryLocked: Boolean = false
 ) { val configured get() = !credentialError && destination.validationError() == null }
 
 private enum class Screen(val title: String, val icon: ImageVector) {
@@ -111,7 +117,9 @@ private enum class Screen(val title: String, val icon: ImageVector) {
             val destination = runCatching { repo.settings.destination() }
             UiSnapshot(repo.settings.enabled, repo.hasAccess(), repo.listenerConnected,
                 destination.getOrDefault(Destination()), destination.isFailure, repo.settings.rules(),
-                repo.store.stats(), repo.store.history(), repo.settings.includeOngoing, repo.settings.lastListenerError)
+                repo.store.stats(), repo.store.history(), repo.settings.includeOngoing, repo.settings.lastListenerError,
+                repo.batteryExempt(), repo.settings.lastCaptureAt, repo.settings.lastCaptureLocked,
+                repo.settings.lastDeliveryAt, repo.settings.lastDeliveryLocked)
         }
     }
     fun task(successMessage: String? = null, action: () -> Unit) {
@@ -204,8 +212,17 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                         onAccess = { accessDialog = true },
                         onOngoing = { value -> task { repo.settings.includeOngoing = value } },
                         onBattery = {
-                            try { activity.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
-                            catch (_: ActivityNotFoundException) { scope.launch { snackbar.showSnackbar("Open Android Settings → Apps → NotiPush → Battery → Unrestricted.") } }
+                            try {
+                                // Core notification automation needs outbound access in Doze;
+                                // Android documents task automation as an acceptable exemption use case.
+                                @SuppressLint("BatteryLife")
+                                val intent = if (repo.batteryExempt()) Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    else Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}"))
+                                activity.startActivity(intent)
+                            } catch (_: ActivityNotFoundException) {
+                                try { activity.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                                catch (_: ActivityNotFoundException) { scope.launch { snackbar.showSnackbar("Open Android Settings → Battery → Battery optimization → NotiPush → Don't optimize.") } }
+                            }
                         },
                         onUrl = ::openUrl, onReset = { resetDialog = true })
                 }
@@ -297,6 +314,9 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         }
         if (state.enabled && !state.connected && state.hasAccess) {
             InfoCard("Listener is reconnecting", "Android has granted access, but the listener isn't connected yet.", Icons.Outlined.Sync, onReconnect)
+        }
+        if (state.enabled && !state.batteryExempt) {
+            InfoCard("Allow delivery while locked", "Open Setup and allow background delivery so Android can send while the phone sleeps.", Icons.Outlined.BatteryChargingFull, onSetup)
         }
         if (state.listenerError.isNotBlank()) InfoCard("Check forwarding", state.listenerError, Icons.Outlined.Info, onSetup)
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -534,8 +554,13 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         HorizontalDivider(Modifier.padding(vertical = 8.dp), color = SoftGreen)
         SectionLabel("ANDROID CONNECTION")
         SetupRow("01", "Notification access", if (state.hasAccess) "Granted by Android" else "Required to read selected notifications", state.hasAccess, onAccess)
-        InfoCard("Keep your bridge running", "If delivery stops with the screen off, set NotiPush battery usage to Unrestricted. Some manufacturers also need autostart enabled.", Icons.Outlined.BatteryChargingFull, onBattery)
-        OutlinedButton(onClick = onBattery, modifier = Modifier.fillMaxWidth()) { Text("Open battery settings") }
+        SetupRow("02", "Delivery while locked", if (state.batteryExempt) "Battery optimization exemption granted" else "Allow background delivery so messages can send during sleep", state.batteryExempt, onBattery)
+        InfoCard("Keep your bridge running", "Tap below and allow NotiPush to ignore battery optimization. On OnePlus, also allow background activity in App info → Battery usage; enable auto launch if OxygenOS offers it. This may use more battery.", Icons.Outlined.BatteryChargingFull)
+        OutlinedButton(onClick = onBattery, modifier = Modifier.fillMaxWidth()) { Text(if (state.batteryExempt) "Review battery settings" else "Allow background delivery") }
+        fun eventTime(time: Long, locked: Boolean): String = if (time == 0L) "None yet" else
+            DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(time)) +
+                if (locked) " · screen off / locked" else " · screen on"
+        InfoCard("Connection check", "Listener: ${if (state.connected) "connected" else "disconnected"}\nLast captured: ${eventTime(state.lastCaptureAt, state.lastCaptureLocked)}\nLast accepted: ${eventTime(state.lastDeliveryAt, state.lastDeliveryLocked)}\nTimes only; no notification text is kept here.", Icons.Outlined.Sync)
         Surface(shape = RoundedCornerShape(18.dp), color = Color.White) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -548,7 +573,7 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         SectionLabel("GOOD TO KNOW")
         InfoCard("Finish on your iPhone", "Install Pushover, sign in to the same account, and enable notifications. In the Watch app, enable Pushover mirroring. Apple Watch alert routing follows your iPhone and Watch settings.", Icons.Outlined.Watch)
         InfoCard("Your phone sets the limits", "Only text exposed by Android can be forwarded. Hidden previews and sensitive content such as OTPs may be redacted. Work profile policies can block Teams notifications. Attachments and replies aren't forwarded.", Icons.Outlined.PrivacyTip)
-        InfoCard("Offline? We'll wait.", "Encrypted messages wait up to 24 hours and retry on network or server errors. Android battery restrictions can delay delivery. Pushover rejections and quota errors appear in Activity.", Icons.Outlined.WifiOff)
+        InfoCard("Offline? We'll wait.", "New notifications send immediately, including while locked when background delivery is allowed. Encrypted messages retry network or server errors for up to 24 hours. Pushover rejections and quota errors appear in Activity.", Icons.Outlined.WifiOff)
         Text("NotiPush has no analytics or hosted backend. Notification text goes directly to Pushover over HTTPS; Pushover can process the forwarded content. Local history contains status only. Changing the destination or pausing forwarding cancels pending deliveries.", fontSize = 11.sp, lineHeight = 18.sp, color = Muted)
         TextButton(onClick = { onUrl("https://pushover.net/api#limits") }) { Text("Pushover allowance & API details") }
         TextButton(onClick = onReset, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Reset app & remove local data") }

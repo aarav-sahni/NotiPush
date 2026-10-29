@@ -1,8 +1,10 @@
 package dev.notipush
 
 import android.app.Application
+import android.app.KeyguardManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.PowerManager
 import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.*
@@ -33,7 +35,28 @@ class NotiPushRepository(private val context: Context) {
     val settings = SecureSettings(context, vault)
     val store = DeliveryStore(context)
     val io = Executors.newSingleThreadExecutor()
+    // Isolated device tests replace this; production starts with HTTPS Pushover.
+    internal var transmit: (Destination, PushMessage) -> PushResult = PushoverClient()::send
+    val deliveryEngine = DeliveryEngine(store,
+        allowed = { pkg -> pkg == context.packageName ||
+            (settings.enabled && settings.rules()[pkg]?.enabled == true && hasAccess()) },
+        destination = ::destinationOrNull,
+        decode = { encrypted ->
+            val data = JSONObject(vault.decrypt(encrypted))
+            PushMessage(data.getString("title"), data.getString("body"), data.getLong("timestamp"))
+        },
+        transmit = { target, message -> transmit(target, message) },
+        onAccepted = { settings.recordDelivery(screenOffOrLocked()) })
+    private val immediate = ImmediateDelivery(context, { id -> deliveryEngine.deliver(id) })
     @Volatile var listenerConnected = false
+    fun batteryExempt() = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
+    private fun screenOffOrLocked() = !context.getSystemService(PowerManager::class.java).isInteractive ||
+        context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
+    fun captureWhileAwake(action: () -> Unit) {
+        val wakeLock = notificationWakeLock(context)
+        try { io.execute { try { action() } finally { wakeLock.releaseSafely() } } }
+        catch (error: RuntimeException) { wakeLock.releaseSafely(); throw error }
+    }
     fun hasAccess() = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
     fun destinationOrNull(): Destination? = runCatching { settings.destination().takeIf { it.validationError() == null } }.getOrNull()
     fun requestReconnect() {
@@ -56,7 +79,9 @@ class NotiPushRepository(private val context: Context) {
         val payload = JSONObject().put("title", captured.message.title).put("body", captured.message.body)
             .put("timestamp", captured.message.timestamp).toString()
         val id = store.enqueue(pkg, label, captured.fingerprint, vault.encrypt(payload), dedupMillis) ?: return null
-        schedule(id)
+        if (pkg != context.packageName) settings.recordCapture(screenOffOrLocked())
+        // Persist a fallback first, then send without waiting on Android's job scheduler.
+        try { schedule(id) } finally { immediate.dispatch(id) }
         return id
     }
     fun sendTest(): Long? {
@@ -70,7 +95,7 @@ class NotiPushRepository(private val context: Context) {
             .setInputData(workDataOf("deliveryId" to id))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .setInitialDelay(45, TimeUnit.SECONDS)
             .addTag("delivery")
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("delivery-$id", ExistingWorkPolicy.KEEP, request)

@@ -13,11 +13,26 @@ Save your Pushover destination, then tap **Send a test notification**. This test
 
 ## Notifications wait until the phone is unlocked
 
-This is a known issue reported with 1.0.2 and is under investigation. Do not assume successful delivery with the app open proves background delivery.
+Update to **1.0.3 or newer**, using the same signing identity. Keep the existing installation so your Pushover settings survive.
 
-Set NotiPush battery use to **Unrestricted**, allow background activity/autostart where the manufacturer provides those settings, and confirm notification access remains granted. If Android exposes redacted notification text, NotiPush cannot recover the hidden content.
+The old delivery path relied entirely on WorkManager, which Android can defer during sleep. The updated app attempts delivery immediately and uses WorkManager for persistent retries. Network access during deep Doze also requires the battery exemption; a CPU wake lock alone is insufficient. [Android's explanation](https://developer.android.com/training/monitoring-device-state/doze-standby).
 
-To reproduce on a test device, enable forwarding, lock the phone, receive a fresh notification from a selected app, and compare the Pushover arrival time before and after unlocking. Capture whether the listener saw the notification while locked or whether only delivery was delayed. Do not include message text or credentials in shared logs.
+1. Open **Setup → Delivery while locked → Allow background delivery** and approve the Android prompt. Check that the row reports **Battery optimization exemption granted**.
+2. On OnePlus/OxygenOS, allow background activity in **App info → Battery usage**. Enable auto launch if available. Menu names vary; an app battery mode called **Unrestricted** may coexist with Android's optimization exemption, so check the green status inside NotiPush too.
+3. Confirm notification access, source selection, filters, and forwarding are enabled.
+4. Lock Android, receive a new notification from a selected app, and check Pushover **before** unlocking Android. Avoid keeping the source conversation open on another device if that suppresses phone notifications.
+5. Unlock Android and inspect **Setup → Connection check** and **Activity**.
+
+| Observation | Meaning / next step |
+| --- | --- |
+| Last captured and last accepted both show screen off / locked | NotiPush handled delivery while asleep; check downstream Pushover/iPhone/Watch routing if alerts are missing |
+| Capture time is while locked, acceptance occurs after unlock | Check battery exemption, OxygenOS background controls, network access, and queue status |
+| Capture time only changes after unlock | The source app or Android/OxygenOS delayed exposing the notification; check the source app's battery/notification settings and NotiPush's listener access |
+| No new capture | Source did not post eligible text, a filter blocked it, or the listener is disconnected/restricted |
+
+The timestamps describe the latest eligible captured notification and the latest accepted request; accepted requests include manual tests. They do not prove that a specific iPhone/Watch displayed an alert. Android may redact sensitive notification text and work-profile policy can block access.
+
+Physical OnePlus verification of this update remains a manual check. The automated test exercises a real system listener with the screen off and forced deep Doze, using a local HTTPS mock instead of real Pushover credentials. See [verification scope](VERIFICATION.md).
 
 ## Notification access is restricted
 
@@ -59,4 +74,4 @@ For a new crash, capture the app-specific crash trace from a test device and rec
 
 ## After reboot or force-stop
 
-The existing listener access and saved settings are retained. Android controls when it reconnects the service. NotiPush does not scan and replay old active notifications. Reopen NotiPush after a force-stop, and check listener status and battery settings if delivery does not resume.
+The existing listener access and saved settings are retained. Android controls when it reconnects the service. NotiPush does not scan and replay old active notifications. Unlock Android once after reboot; the encrypted settings/outbox are unavailable before that first unlock. Reopen NotiPush after a force-stop, and check listener status and battery settings if delivery does not resume.

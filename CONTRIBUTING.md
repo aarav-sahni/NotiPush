@@ -11,13 +11,13 @@ Install the tools in the [README](README.md#build-and-test), then run:
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-Use a test device for instrumented tests. They reset NotiPush's local configuration and are not suitable for a daily-use installation containing saved settings.
+Use a disposable emulator for the full instrumented suite. Tests reset NotiPush's local configuration; the locked-delivery regression also changes emulator idle/battery/listener settings and cleans them up afterward. It refuses to run on a physical phone. Never run the suite against a daily-use installation containing saved settings.
 
 ```sh
-ANDROID_SERIAL=YOUR_TEST_DEVICE ./gradlew :app:connectedDebugAndroidTest
+ANDROID_SERIAL=YOUR_TEST_EMULATOR ./gradlew :app:connectedDebugAndroidTest
 ```
 
-Tests and CI use synthetic notification text and mock API responses. Do not add real Pushover keys, notification content, private device logs, or signing credentials to fixtures, issues, or pull requests.
+Tests and CI use synthetic notification text and mock API responses. The locked test posts a shell notification through Android's actual listener, forces deep Doze with the screen off and the app exempted from battery optimization, and sends HTTPS to a local mock with an ephemeral certificate. No real Pushover request is made. CI currently runs unit/lint/release checks, not emulator instrumentation. Do not add real Pushover keys, notification content, private device logs, or signing credentials to fixtures, issues, or pull requests.
 
 ## Changes and verification
 

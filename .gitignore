@@ -1,0 +1,35 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+.idea/
+*.iml
+*.jks
+*.keystore
+*.p12
+.DS_Store
+__pycache__/
+captures/
+
+# Local releases and installation diagnostics belong outside source history.
+/dist/
+*.apk
+*.aab
+*.apks
+*.idsig
+*.hprof
+*.log
+/diagnostics/
+*install-report*.json
+
+# Credentials and private signing material.
+.env
+.env.*
+!.env.example
+keystore.properties
+secrets.properties
+signing/
+*.pfx
+*.pem
+*.key
+*.p8

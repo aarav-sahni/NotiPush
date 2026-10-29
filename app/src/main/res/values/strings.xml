@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">NotiPush</string>
+    <string name="listener_name">NotiPush · forward selected notifications</string>
+</resources>

@@ -2,20 +2,23 @@ package dev.notipush
 
 import java.security.MessageDigest
 
-data class SourceApp(val packageName: String, val label: String)
+data class SourceApp(val packageName: String, val label: String, val userId: Int = 0) {
+    val key: String get() = sourceKey(packageName, userId)
+}
+fun sourceKey(packageName: String, userId: Int) = if (userId == 0) packageName else "$packageName@$userId"
 
 val starterApps = listOf(
     SourceApp("com.whatsapp", "WhatsApp"),
     SourceApp("com.google.android.apps.messaging", "Google Messages"),
-    SourceApp("com.microsoft.teams", "Microsoft Teams"),
-    SourceApp("com.whatsapp.w4b", "WhatsApp Business")
+    SourceApp("com.microsoft.teams", "Microsoft Teams")
 )
 
 data class AppRule(
     val enabled: Boolean = true,
     val include: String = "",
     val exclude: String = "",
-    val since: Long = System.currentTimeMillis()
+    val since: Long = System.currentTimeMillis(),
+    val displayName: String = ""
 ) {
     fun accepts(title: String, message: String): Boolean {
         val text = "$title\n$message"
@@ -40,9 +43,16 @@ data class Destination(val token: String = "", val user: String = "", val device
 
 data class PushMessage(val title: String, val body: String, val timestamp: Long)
 data class CapturedMessage(val fingerprint: String, val message: PushMessage)
+data class DeliveryTiming(
+    val postedAt: Long = 0, val receivedAt: Long = 0, val receivedState: String = "",
+    val firstAttemptAt: Long = 0, val firstAttemptState: String = "",
+    val lastAttemptAt: Long = 0, val lastAttemptState: String = "",
+    val completedAt: Long = 0, val completedState: String = "", val attempts: Int = 0
+)
 data class Delivery(
     val id: Long, val packageName: String, val label: String, val created: Long,
-    val status: String, val detail: String, val payload: String
+    val status: String, val detail: String, val payload: String,
+    val timing: DeliveryTiming = DeliveryTiming()
 )
 data class DeliveryStats(val accepted: Int = 0, val queued: Int = 0, val failed: Int = 0)
 

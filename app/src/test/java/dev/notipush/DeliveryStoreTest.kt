@@ -74,4 +74,38 @@ class DeliveryStoreTest {
         store.pending().forEach { store.finish(it, "sent", "Accepted") }
         assertEquals(200, store.history().size)
     }
+    @Test fun timingKeepsFirstAttemptWhenLaterRetryRunsAfterWake() {
+        val id = store.enqueue("app@998", "Clone", "timed", "ciphertext", 60_000,
+            DeliveryTiming(postedAt = 10, receivedAt = 12, receivedState = "AOD"))!!
+        store.recordAttempt(id, "AOD · Doze")
+        val first = store.get(id)!!.timing.firstAttemptAt
+        store.recordAttempt(id, "screen on")
+        store.finish(id, "sent", "Accepted")
+        store.recordCompletion(id, "screen on")
+        store.close(); store = DeliveryStore(context)
+        val row = store.get(id)!!
+        assertEquals("", row.payload)
+        assertEquals(10L, row.timing.postedAt)
+        assertEquals("AOD", row.timing.receivedState)
+        assertEquals(first, row.timing.firstAttemptAt)
+        assertEquals("AOD · Doze", row.timing.firstAttemptState)
+        assertEquals("screen on", row.timing.lastAttemptState)
+        assertEquals(2, row.timing.attempts)
+        assertTrue(row.timing.completedAt > 0)
+    }
+    @Test fun upgradingVersionOnePreservesEncryptedPendingRows() {
+        store.close(); context.deleteDatabase("notipush.db")
+        context.openOrCreateDatabase("notipush.db", Context.MODE_PRIVATE, null).use { old ->
+            old.execSQL("CREATE TABLE deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, package TEXT NOT NULL, label TEXT NOT NULL, created INTEGER NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL, payload TEXT NOT NULL)")
+            old.execSQL("CREATE TABLE seen (fingerprint TEXT PRIMARY KEY, expires INTEGER NOT NULL)")
+            old.execSQL("INSERT INTO deliveries VALUES(1,'app','App',?,'queued','Waiting','ciphertext')", arrayOf(System.currentTimeMillis()))
+            old.version = 1
+        }
+        store = DeliveryStore(context)
+        assertEquals("ciphertext", store.get(1)!!.payload)
+        assertEquals("queued", store.get(1)!!.status)
+        assertEquals(DeliveryTiming(), store.get(1)!!.timing)
+        store.recordAttempt(1, "AOD")
+        assertEquals(1, store.get(1)!!.timing.attempts)
+    }
 }

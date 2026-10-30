@@ -10,7 +10,9 @@ class DeliveryEngine(
     private val destination: () -> Destination?,
     private val decode: (String) -> PushMessage,
     private val transmit: (Destination, PushMessage) -> PushResult,
-    private val onAccepted: () -> Unit = {}
+    private val onAccepted: () -> Unit = {},
+    private val onAttempt: (Long) -> Unit = {},
+    private val onCompletion: (Long) -> Unit = {}
 ) {
     enum class Outcome { Finished, Retry }
 
@@ -48,17 +50,20 @@ class DeliveryEngine(
             store.finish(id, "cancelled", "Forwarding paused, source disabled, or notification access removed")
             return Outcome.Finished
         }
+        onAttempt(id)
         val result = try { transmit(target, message) } catch (_: Exception) {
             PushResult.Retry("Delivery interrupted; retry queued")
         }
         return when (result) {
             PushResult.Accepted -> {
                 store.finish(id, "sent", "Accepted by Pushover")
+                onCompletion(id)
                 onAccepted()
                 Outcome.Finished
             }
             is PushResult.Rejected -> {
                 store.finish(id, "failed", result.reason)
+                onCompletion(id)
                 Outcome.Finished
             }
             is PushResult.Retry -> {

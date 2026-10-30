@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Real-time notification automation needs network access during Doze. User opt-in only. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Launcher queries let users choose apps without QUERY_ALL_PACKAGES. -->
     <queries>
         <intent>
@@ -12,7 +15,6 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
         <package android:name="com.whatsapp" />
-        <package android:name="com.whatsapp.w4b" />
         <package android:name="com.google.android.apps.messaging" />
         <package android:name="com.microsoft.teams" />
     </queries>
@@ -32,6 +34,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".ForwardingService" android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
         <service
             android:name=".NotificationBridge"
             android:label="@string/listener_name"

@@ -1,6 +1,8 @@
 package dev.notipush
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
@@ -9,6 +11,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
@@ -65,6 +70,10 @@ private val NotiColors = lightColorScheme(
 )
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() {
+        super.onStart()
+        if (repository.settings.enabled && repository.batteryExempt()) repository.ensureForwarder()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -92,7 +101,11 @@ private data class UiSnapshot(
     val lastCaptureAt: Long = 0,
     val lastCaptureLocked: Boolean = false,
     val lastDeliveryAt: Long = 0,
-    val lastDeliveryLocked: Boolean = false
+    val lastDeliveryLocked: Boolean = false,
+    val forwarderRunning: Boolean = false,
+    val serviceError: String = "",
+    val serviceNotificationsAllowed: Boolean = false,
+    val observationSummary: String = ""
 ) { val configured get() = !credentialError && destination.validationError() == null }
 
 private enum class Screen(val title: String, val icon: ImageVector) {
@@ -119,7 +132,9 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                 destination.getOrDefault(Destination()), destination.isFailure, repo.settings.rules(),
                 repo.store.stats(), repo.store.history(), repo.settings.includeOngoing, repo.settings.lastListenerError,
                 repo.batteryExempt(), repo.settings.lastCaptureAt, repo.settings.lastCaptureLocked,
-                repo.settings.lastDeliveryAt, repo.settings.lastDeliveryLocked)
+                repo.settings.lastDeliveryAt, repo.settings.lastDeliveryLocked, repo.forwarderRunning,
+                repo.settings.lastServiceError, androidx.core.app.NotificationManagerCompat.from(activity).areNotificationsEnabled(),
+                repo.settings.observationSummary())
         }
     }
     fun task(successMessage: String? = null, action: () -> Unit) {
@@ -145,24 +160,26 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                 .onFailure { scope.launch { snackbar.showSnackbar("Open Android Settings → Notification access → NotiPush.") } }
         }
     }
+    var startAfterPermission by remember { mutableStateOf(false) }
+    val statusPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (startAfterPermission) task { repo.enableForwarding() }
+        startAfterPermission = false
+    }
     LaunchedEffect(Unit) {
         activity.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) { refresh(); delay(1_500) }
         }
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(snapshot.rules.keys) {
         withContext(Dispatchers.IO) {
-            val pm = activity.packageManager
-            val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-            val found = pm.queryIntentActivities(launcher, 0).map {
-                SourceApp(it.activityInfo.packageName, it.loadLabel(pm).toString())
-            }.filter { it.packageName !in setOf(activity.packageName, "net.superblock.pushover") }
-            val present = (found.map { it.packageName } + starterApps.mapNotNull {
-                runCatching { pm.getApplicationInfo(it.packageName, 0); it.packageName }.getOrNull()
-            }).toSet()
+            val catalog = repo.sources.discover(repo.settings.observedSources())
+            val rules = repo.settings.rules()
+            catalog.sources.filter { it.userId != 0 && it.key !in rules }.forEach {
+                repo.settings.saveRule(it.key, rules[it.packageName] ?: AppRule(enabled = false))
+            }
             withContext(Dispatchers.Main) {
-                installed = present
-                sources = (starterApps + found.sortedBy { it.label.lowercase() }).distinctBy { it.packageName }
+                installed = catalog.installed
+                sources = catalog.sources
             }
         }
     }
@@ -187,14 +204,18 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                     Spacer(Modifier.width(10.dp))
                     Text("NotiPush", fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.7).sp)
                     Spacer(Modifier.weight(1f))
-                    StatusPill(if (snapshot.enabled && snapshot.hasAccess && snapshot.connected && snapshot.configured) "LIVE" else "STANDBY",
-                        snapshot.enabled && snapshot.hasAccess && snapshot.connected && snapshot.configured)
+                    val live = snapshot.enabled && snapshot.hasAccess && snapshot.connected && snapshot.configured && snapshot.batteryExempt && snapshot.forwarderRunning
+                    StatusPill(if (live) "LIVE" else if (snapshot.enabled) "LIMITED" else "STANDBY", live)
                 }
                 when (screen) {
                     Screen.Home -> HomeScreen(snapshot,
-                        onToggle = { value -> task {
-                            if (value) { repo.settings.enabled = true; repo.requestReconnect() } else repo.pause()
-                        } },
+                        onToggle = { value ->
+                            if (!value) task { repo.pause() }
+                            else if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                startAfterPermission = true
+                                statusPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else task { repo.enableForwarding() }
+                        },
                         onSetup = { screen = Screen.Settings }, onApps = { screen = Screen.Apps },
                         onAccess = { accessDialog = true }, onActivity = { screen = Screen.Activity },
                         onReconnect = { repo.requestReconnect(); scope.launch { snackbar.showSnackbar("Reconnect requested. If it stays disconnected, toggle NotiPush in Android notification access.") } })
@@ -216,14 +237,19 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                                 // Core notification automation needs outbound access in Doze;
                                 // Android documents task automation as an acceptable exemption use case.
                                 @SuppressLint("BatteryLife")
-                                val intent = if (repo.batteryExempt()) Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    else Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}"))
+                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}"))
                                 activity.startActivity(intent)
                             } catch (_: ActivityNotFoundException) {
                                 try { activity.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
                                 catch (_: ActivityNotFoundException) { scope.launch { snackbar.showSnackbar("Open Android Settings → Battery → Battery optimization → NotiPush → Don't optimize.") } }
                             }
                         },
+                        onStatusPermission = {
+                            startAfterPermission = false
+                            statusPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        },
+                        onAppInfo = { activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}"))) },
+                        onSystemSettings = { activity.startActivity(Intent(Settings.ACTION_SETTINGS)) },
                         onUrl = ::openUrl, onReset = { resetDialog = true })
                 }
             }
@@ -271,7 +297,7 @@ private enum class Screen(val title: String, val icon: ImageVector) {
     state: UiSnapshot, onToggle: (Boolean) -> Unit, onSetup: () -> Unit, onApps: () -> Unit,
     onAccess: () -> Unit, onActivity: () -> Unit, onReconnect: () -> Unit
 ) {
-    val ready = state.configured && state.hasAccess && state.rules.values.any { it.enabled }
+    val ready = state.configured && state.hasAccess && state.batteryExempt && state.rules.values.any { it.enabled }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(Forest).padding(24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -310,6 +336,7 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                 SetupRow("01", "Connect Pushover", "Add your API token and user key", state.configured, onSetup)
                 SetupRow("02", "Allow notification access", "Give your bridge a way to listen", state.hasAccess, onAccess)
                 SetupRow("03", "Choose your apps", "WhatsApp, Messages, Teams, and more", state.rules.values.any { it.enabled }, onApps)
+                SetupRow("04", "Allow delivery while locked", "Grant the battery optimization exemption in Setup", state.batteryExempt, onSetup)
             }
         }
         if (state.enabled && !state.connected && state.hasAccess) {
@@ -408,14 +435,14 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         SectionLabel("${rules.values.count { it.enabled }} APPS SELECTED")
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-            items(visible, key = { it.packageName }) { source ->
-                val rule = rules[source.packageName] ?: AppRule(enabled = false)
-                val present = source.packageName in installed
+            items(visible, key = { it.key }) { source ->
+                val rule = rules[source.key] ?: AppRule(enabled = false)
+                val present = source.key in installed
                 Surface(onClick = { editing = source }, shape = RoundedCornerShape(18.dp), color = Color.White) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         AppBadge(source)
                         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(source.label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(rule.displayName.ifBlank { source.label }, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(when {
                                 !present -> "Not installed on this phone"
                                 rule.include.isNotBlank() || rule.exclude.isNotBlank() -> "Keyword filters active"
@@ -423,7 +450,7 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                                 else -> "Not forwarding"
                             }, fontSize = 11.sp, color = Muted)
                         }
-                        Switch(rule.enabled, onCheckedChange = { onRule(source.packageName, rule.copy(enabled = it, since = System.currentTimeMillis())) })
+                        Switch(rule.enabled, onCheckedChange = { onRule(source.key, rule.copy(enabled = it, since = System.currentTimeMillis())) })
                     }
                 }
             }
@@ -432,21 +459,24 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         }
     }
     editing?.let { source ->
-        val current = rules[source.packageName] ?: AppRule(enabled = false)
-        var include by remember(source.packageName) { mutableStateOf(current.include) }
-        var exclude by remember(source.packageName) { mutableStateOf(current.exclude) }
+        val current = rules[source.key] ?: AppRule(enabled = false)
+        var include by remember(source.key) { mutableStateOf(current.include) }
+        var exclude by remember(source.key) { mutableStateOf(current.exclude) }
+        var displayName by remember(source.key) { mutableStateOf(current.displayName) }
         AlertDialog(onDismissRequest = { editing = null },
             title = { Text(source.label) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(source.packageName, fontSize = 11.sp, color = Muted)
+                    Text(source.key, fontSize = 11.sp, color = Muted)
+                    OutlinedTextField(displayName, { displayName = it }, label = { Text("Forwarded app name (optional)") },
+                        placeholder = { Text(source.label) }, supportingText = { Text("Blank uses the phone's app or clone name.") })
                     Text("Match the notification title or text. Separate keywords with commas; matching ignores case.", fontSize = 13.sp)
                     OutlinedTextField(include, { include = it }, label = { Text("Only containing (optional)") }, placeholder = { Text("family, project") })
                     OutlinedTextField(exclude, { exclude = it }, label = { Text("Skip containing (optional)") }, placeholder = { Text("verification, promo") })
                     Text("Any include keyword can match. Any skip keyword blocks the notification.", fontSize = 11.sp, color = Muted)
                 }
             },
-            confirmButton = { TextButton(onClick = { onRule(source.packageName, current.copy(include = include.trim(), exclude = exclude.trim())); editing = null }) { Text("Save filters") } },
+            confirmButton = { TextButton(onClick = { onRule(source.key, current.copy(include = include.trim(), exclude = exclude.trim(), displayName = displayName.trim())); editing = null }) { Text("Save filters") } },
             dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } }
         )
     }
@@ -454,7 +484,7 @@ private enum class Screen(val title: String, val icon: ImageVector) {
 
 @Composable private fun AppBadge(source: SourceApp) {
     val (color, icon) = when (source.packageName) {
-        "com.whatsapp", "com.whatsapp.w4b" -> Color(0xFFDCF3DF) to Icons.Outlined.ChatBubbleOutline
+        "com.whatsapp" -> Color(0xFFDCF3DF) to Icons.Outlined.ChatBubbleOutline
         "com.google.android.apps.messaging" -> Color(0xFFE1ECFC) to Icons.Outlined.Sms
         "com.microsoft.teams" -> Color(0xFFE8E5FA) to Icons.Outlined.Groups
         else -> SoftGreen to Icons.Outlined.Apps
@@ -474,6 +504,7 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (history.isEmpty()) item { EmptyState(Icons.Outlined.MarkChatRead, "A clean slate.", "Send a test from Setup, or turn on forwarding to see deliveries here.") }
             items(history, key = { it.id }) { row ->
+                var showTiming by remember(row.id) { mutableStateOf(false) }
                 Surface(shape = RoundedCornerShape(18.dp), color = Color.White) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -488,12 +519,32 @@ private enum class Screen(val title: String, val icon: ImageVector) {
                         }
                         Text(row.detail, fontSize = 12.sp, lineHeight = 18.sp, color = Muted)
                         Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(row.created)), fontSize = 10.sp, color = Muted)
+                        if (row.timing.receivedAt > 0 || row.timing.attempts > 0) {
+                            TextButton(onClick = { showTiming = !showTiming }, contentPadding = PaddingValues(0.dp)) {
+                                Text(if (showTiming) "Hide delivery timing" else "Show delivery timing", fontSize = 11.sp)
+                            }
+                            if (showTiming) Text(deliveryTimingText(row), fontSize = 11.sp, lineHeight = 18.sp, color = Muted)
+                        }
                     }
                 }
             }
             if (history.isNotEmpty()) item { Text("Pushover acceptance confirms receipt by its API. Device delivery and Apple Watch alerts depend on your Pushover and iOS settings. The most recent 200 completed deliveries are retained.", fontSize = 11.sp, lineHeight = 17.sp, color = Muted) }
         }
     }
+}
+
+internal fun deliveryTimingText(row: Delivery): String {
+    fun time(value: Long) = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(value))
+    val t = row.timing
+    return buildList {
+        if (t.postedAt > 0) add("Android posted: ${time(t.postedAt)}")
+        if (t.receivedAt > 0) add("NotiPush received: ${time(t.receivedAt)} · ${t.receivedState}")
+        add("Captured: ${time(row.created)}")
+        if (t.firstAttemptAt > 0) add("First send attempt: ${time(t.firstAttemptAt)} · ${t.firstAttemptState}")
+        if (t.attempts > 1) add("Latest send attempt: ${time(t.lastAttemptAt)} · ${t.lastAttemptState}")
+        if (t.completedAt > 0) add("${if (row.status == "sent") "Accepted" else "Completed"}: ${time(t.completedAt)} · ${t.completedState}")
+        add("Send attempts: ${t.attempts}. Timing contains no message text.")
+    }.joinToString("\n")
 }
 
 @Composable private fun EmptyState(icon: ImageVector, title: String, description: String) {
@@ -506,7 +557,8 @@ private enum class Screen(val title: String, val icon: ImageVector) {
 
 @Composable private fun SettingsScreen(
     state: UiSnapshot, onSave: (Destination) -> Unit, onTest: () -> Unit, onAccess: () -> Unit,
-    onOngoing: (Boolean) -> Unit, onBattery: () -> Unit, onUrl: (String) -> Unit, onReset: () -> Unit
+    onOngoing: (Boolean) -> Unit, onBattery: () -> Unit, onStatusPermission: () -> Unit,
+    onAppInfo: () -> Unit, onSystemSettings: () -> Unit, onUrl: (String) -> Unit, onReset: () -> Unit
 ) {
     var token by remember(state.destination) { mutableStateOf(state.destination.token) }
     var user by remember(state.destination) { mutableStateOf(state.destination.user) }
@@ -554,13 +606,19 @@ private enum class Screen(val title: String, val icon: ImageVector) {
         HorizontalDivider(Modifier.padding(vertical = 8.dp), color = SoftGreen)
         SectionLabel("ANDROID CONNECTION")
         SetupRow("01", "Notification access", if (state.hasAccess) "Granted by Android" else "Required to read selected notifications", state.hasAccess, onAccess)
-        SetupRow("02", "Delivery while locked", if (state.batteryExempt) "Battery optimization exemption granted" else "Allow background delivery so messages can send during sleep", state.batteryExempt, onBattery)
-        InfoCard("Keep your bridge running", "Tap below and allow NotiPush to ignore battery optimization. On OnePlus, also allow background activity in App info → Battery usage; enable auto launch if OxygenOS offers it. This may use more battery.", Icons.Outlined.BatteryChargingFull)
-        OutlinedButton(onClick = onBattery, modifier = Modifier.fillMaxWidth()) { Text(if (state.batteryExempt) "Review battery settings" else "Allow background delivery") }
+        SetupRow("02", "Delivery while locked", if (state.batteryExempt) "Battery optimization exemption granted" else "Allow background delivery so messages can send during sleep", state.batteryExempt, { if (!state.batteryExempt) onBattery() })
+        InfoCard("Keep your bridge running", "The exemption above is checked with Android. If OxygenOS offers background activity or auto launch controls for NotiPush, allow them. Some builds show no such controls; don’t keep searching an empty battery page. Check that the persistent service below is running.", Icons.Outlined.BatteryChargingFull)
+        OutlinedButton(onClick = onBattery, enabled = !state.batteryExempt, modifier = Modifier.fillMaxWidth()) { Text(if (state.batteryExempt) "Background delivery allowed" else "Allow background delivery") }
+        OutlinedButton(onClick = onAppInfo, modifier = Modifier.fillMaxWidth()) { Text("Open app info") }
+        InfoCard("Check OxygenOS standby settings", "Search Android Settings for Sleep standby optimization and turn it off for immediate delivery. Check Power saving mode and background activity for WhatsApp, Messages, and Teams too. AOD appearance settings don't grant background network access. Names vary by OxygenOS version.", Icons.Outlined.BatteryChargingFull, onSystemSettings)
+        InfoCard("Persistent forwarding", "Service: ${if (state.forwarderRunning) "running" else "stopped"}. Forwarding uses an ongoing status notification while enabled; it doesn't keep the screen on or hold a permanent wake lock.", Icons.Outlined.Sync)
+        if (state.serviceError.isNotBlank()) Text(state.serviceError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        if (!state.serviceNotificationsAllowed) OutlinedButton(onClick = onStatusPermission, modifier = Modifier.fillMaxWidth()) { Text("Show forwarding status notification") }
         fun eventTime(time: Long, locked: Boolean): String = if (time == 0L) "None yet" else
             DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(time)) +
                 if (locked) " · screen off / locked" else " · screen on"
         InfoCard("Connection check", "Listener: ${if (state.connected) "connected" else "disconnected"}\nLast captured: ${eventTime(state.lastCaptureAt, state.lastCaptureLocked)}\nLast accepted: ${eventTime(state.lastDeliveryAt, state.lastDeliveryLocked)}\nTimes only; no notification text is kept here.", Icons.Outlined.Sync)
+        if (state.observationSummary.isNotBlank()) InfoCard("Recent listener events", state.observationSummary, Icons.Outlined.Schedule)
         Surface(shape = RoundedCornerShape(18.dp), color = Color.White) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

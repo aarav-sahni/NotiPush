@@ -59,6 +59,7 @@ def verify(apk):
         "androidx.work.OverwritingInputMerger": [],
         "dev.notipush.ForwardWorker": ["android.content.Context", "androidx.work.WorkerParameters"],
         "dev.notipush.RecoveryWorker": ["android.content.Context", "androidx.work.WorkerParameters"],
+        "dev.notipush.ForwardingService": [],
     }
     for name, parameters in entry_points.items():
         cls = classes.get(name)

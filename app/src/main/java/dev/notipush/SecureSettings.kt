@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import org.json.JSONObject
+import org.json.JSONArray
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -60,6 +61,9 @@ class SecureSettings(context: Context, private val vault: Vault) {
     var lastListenerError: String
         get() = preferences.getString("listenerError", "") ?: ""
         set(value) { preferences.edit().putString("listenerError", value).apply() }
+    var lastServiceError: String
+        get() = preferences.getString("serviceError", "") ?: ""
+        set(value) { preferences.edit().putString("serviceError", value).apply() }
     val lastCaptureAt get() = preferences.getLong("lastCaptureAt", 0)
     val lastCaptureLocked get() = preferences.getBoolean("lastCaptureLocked", false)
     val lastDeliveryAt get() = preferences.getLong("lastDeliveryAt", 0)
@@ -85,13 +89,44 @@ class SecureSettings(context: Context, private val vault: Vault) {
         val data = JSONObject(preferences.getString("rules", "{}") ?: "{}")
         return data.keys().asSequence().associateWith { pkg ->
             val rule = data.getJSONObject(pkg)
-            AppRule(rule.optBoolean("enabled", false), rule.optString("include"), rule.optString("exclude"), rule.optLong("since"))
+            AppRule(rule.optBoolean("enabled", false), rule.optString("include"), rule.optString("exclude"), rule.optLong("since"), rule.optString("displayName"))
         }
     }
+    fun ruleFor(key: String): AppRule? = rules().let { it[key] ?: it[key.substringBefore('@')] }
+    @Synchronized fun rememberSource(source: SourceApp) {
+        if (source.userId == 0) return
+        val data = JSONObject(preferences.getString("observedSources", "{}") ?: "{}")
+        data.put(source.key, JSONObject().put("package", source.packageName).put("label", source.label).put("user", source.userId))
+        preferences.edit().putString("observedSources", data.toString()).apply()
+    }
+    fun observedSources(): List<SourceApp> = runCatching {
+        val data = JSONObject(preferences.getString("observedSources", "{}") ?: "{}")
+        data.keys().asSequence().map { key -> data.getJSONObject(key).let {
+            SourceApp(it.getString("package"), it.getString("label"), it.getInt("user"))
+        } }.toList()
+    }.getOrDefault(emptyList())
+    @Synchronized fun recordObservation(source: String, timing: DeliveryTiming, result: String) {
+        val previous = JSONArray(preferences.getString("listenerObservations", "[]") ?: "[]")
+        val updated = JSONArray()
+        for (index in maxOf(0, previous.length() - 19) until previous.length()) updated.put(previous.getJSONObject(index))
+        updated.put(JSONObject().put("source", source).put("postedAt", timing.postedAt)
+            .put("receivedAt", timing.receivedAt).put("state", timing.receivedState).put("result", result))
+        preferences.edit().putString("listenerObservations", updated.toString()).apply()
+    }
+    fun observationSummary(): String = runCatching {
+        val data = JSONArray(preferences.getString("listenerObservations", "[]") ?: "[]")
+        val format = java.text.DateFormat.getTimeInstance(java.text.DateFormat.MEDIUM)
+        (maxOf(0, data.length() - 5) until data.length()).reversed().joinToString("\n\n") { index ->
+            val event = data.getJSONObject(index)
+            "${event.getString("source")} · ${event.getString("state")}\n" +
+                "Android posted ${format.format(java.util.Date(event.getLong("postedAt")))}; received ${format.format(java.util.Date(event.getLong("receivedAt")))}\n" +
+                event.getString("result")
+        }
+    }.getOrDefault("")
     @Synchronized fun saveRule(packageName: String, rule: AppRule) {
         val data = JSONObject(preferences.getString("rules", "{}") ?: "{}")
         data.put(packageName, JSONObject().put("enabled", rule.enabled).put("include", rule.include)
-            .put("exclude", rule.exclude).put("since", rule.since))
+            .put("exclude", rule.exclude).put("since", rule.since).put("displayName", rule.displayName))
         preferences.edit().putString("rules", data.toString()).commit()
     }
     fun initialize() {

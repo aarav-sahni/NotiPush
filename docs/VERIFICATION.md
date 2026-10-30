@@ -1,5 +1,30 @@
 # Verification — 29 October 2026
 
+## Version 1.0.4 — persistent forwarding and profile identities
+
+| Check | Result |
+| --- | --- |
+| Unit tests on API 36/37 framework models | 67 passed, 0 failed |
+| Android 16 ARM64 emulator suite | 5 passed; focused Doze/privacy regression also passed after diagnostics changes |
+| Forced-Doze path | Foreground service running; fresh listener callback, actual HTTPS to a local TLS mock, timing recorded, and Pause action verified |
+| Database upgrade | Version 1 encrypted queued rows survive version 2 timing-schema migration |
+| Profile rules | Independent clone identities, legacy fallback, display-name persistence, and observed-profile discovery passed |
+| Diagnostic helper tests | 11 passed |
+| Lint | 0 errors; non-fatal warnings remain |
+| Signed, minified APK | v2/v3 signatures, reflection entry points including the foreground service, CRC, ARM64, and static 16 KB alignment passed |
+| Manual signed upgrade on OnePlus 13R / OxygenOS 16 | 1.0.4 installed; existing configuration retained |
+| Two physical signed-release cold starts | Each survived 15 seconds, rendered navigation, and produced no new NotiPush crash |
+| Physical service state | Notification access and exemption granted; foreground service running; destination configuration present |
+| Physical WhatsApp notification on AOD | One manually generated clone notification captured and accepted while the display remained in AOD |
+
+For that one physical notification, Android post → listener arrival was **128 ms**, the first send began **207 ms** after posting, and Pushover accepted it **745 ms** after posting. Post, receive, first attempt, and completion are retained as metadata, without message text. The user also confirmed AOD delivery.
+
+**Limits:** one notification is not a reliability or soak test. Repeated/burst messages, every WhatsApp profile, Google Messages, Teams, long idle, unplugged operation, and physical offline/reconnect cases have not all been verified. The phone was USB-connected during the measured sample. Instrumented emulator tests run inside the app and can influence process lifetime; they do not establish unattended OEM behaviour. Android 17 and 16 KB runtime limitations recorded below still apply.
+
+On this build the clone-alias endpoint rejects callers without `com.oplus.permission.safe.PROTECT`, defined by the OS as **signature|privileged**. The app distinguishes clone profiles, but automatic custom aliases are unavailable through that endpoint. Use the per-copy display-name setting; no personal account-name mapping is embedded in the APK. Device-specific manual setup is separate from source verification.
+
+A normal ADB update request stalled behind the vendor verifier without a visible approval prompt. Opening the APK manually completed the signed upgrade. No verifier, system permission boundary, AOD setting, or app data was disabled/erased to make installation succeed.
+
 ## Version 1.0.3 — locked-screen delivery
 
 The prior implementation handed every message to WorkManager. That made the initial send subject to job scheduling during sleep. The update persists and schedules the retry first, then sends immediately on a dedicated background executor. Capture and sending use partial wake locks with 45-second safety timeouts, released after use. The live sender and retry worker share delivery coordination; queue rows remain recoverable after process death.
@@ -23,7 +48,7 @@ Setup now requests Android's battery optimization exemption on an explicit tap a
 
 The instrumented Doze test runs only on a disposable emulator. It uses synthetic content, placeholder keys, and an ephemeral local TLS certificate. It does not contact Pushover. Cleanup exits forced idle, resets simulated battery state, restores the prior battery exemption, and removes the test listener grant. Screenshots were refreshed from empty demo settings, including the new [background-delivery setup](screenshots/background.png).
 
-The OnePlus is disconnected for this update; **1.0.3 has not yet been tested on the physical OnePlus or against real Pushover / iPhone / Apple Watch delivery**. The user will install the signed update and perform the locked-phone check in the README. Android 17/16 KB runtime limitations below still apply. GitHub Actions is configured but has not run on a remote repository.
+At its release, 1.0.3 had not been physically tested on the OnePlus. The subsequent user test still showed AOD delays; the instrumented emulator result alone was insufficient. The 1.0.4 section above records the later physical evidence. Android 17/16 KB runtime limitations below still apply. GitHub Actions is configured but has not run on a remote repository.
 
 ## Version 1.0.2 — physical OnePlus diagnosis and release fix
 

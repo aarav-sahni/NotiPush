@@ -14,7 +14,7 @@ WhatsApp · Google Messages · Teams · other selected apps
               iPhone · Apple Watch · other devices
 ```
 
-**Android 16+ · Kotlin · Jetpack Compose · Current release: 1.0.3**
+**Android 16+ · Kotlin · Jetpack Compose · Current release: 1.0.4**
 
 ## Screenshots
 
@@ -24,8 +24,9 @@ WhatsApp · Google Messages · Teams · other selected apps
 
 ## Features
 
-- Select individual apps. WhatsApp, Google Messages, and Microsoft Teams are preselected; WhatsApp Business and other installed launcher apps are available too.
-- Forward the app name, conversation or sender, message text, and original timestamp.
+- Select individual apps. WhatsApp, Messages, and Teams are the three starter apps. Other installed apps are available too; WhatsApp Business is no longer a separate starter entry.
+- Forward the app name, conversation or sender, message text, and original timestamp. OxygenOS WhatsApp copies have separate profile identities and configurable display names.
+- Run a persistent foreground bridge while forwarding is enabled, with a status notification and Pause action.
 - Filter each app by include/exclude keywords, ignoring case.
 - Send to all your Pushover devices or a named device, with low, normal, or high priority.
 - Suppress duplicate updates and group summaries; ignore ongoing notifications by default.
@@ -48,7 +49,7 @@ NotiPush has no service fee. Pushover's client licensing and [message allowance]
 
 Use the signed APK attached to a published GitHub release, when available, or [build a release locally](#build-a-signed-release). This repository keeps generated APKs in the ignored `dist/` directory rather than in Git history.
 
-Open the APK on your Android phone and allow installation from the source you chose when Android prompts. Updates must use the same signing key. Use **1.0.3 or newer** for the locked-phone delivery fix. Version 1.0.1 has a release-only startup crash fixed in 1.0.2. Installing a same-signer update preserves your settings; do not uninstall the working app first.
+Open the APK on your Android phone and allow installation from the source you chose when Android prompts. Updates must use the same signing key. Use **1.0.4 or newer** for persistent forwarding, AOD diagnostics, and separate clone identities. The earlier 1.0.3 change alone did not resolve the reported OnePlus AOD delay. Version 1.0.1 has a release-only startup crash fixed in 1.0.2. Installing a same-signer update preserves your settings; do not uninstall the working app first.
 
 ## Connect Pushover
 
@@ -75,11 +76,11 @@ Tap **Save destination → Send a test notification**. In **Activity**, **Accept
 2. In **Apps**, choose the notification sources you want.
 3. Tap an app to add optional keyword filters. Any include keyword can match; any exclude keyword blocks the notification. Leave both fields empty to forward all eligible text notifications from that app.
 4. In **Setup → Delivery while locked**, tap **Allow background delivery** and approve Android's battery optimization exemption. Confirm this row shows **Battery optimization exemption granted**.
-5. On OnePlus/OxygenOS, also allow background activity under **App info → Battery usage**. Enable auto launch if your build offers it; names vary by OS version.
-6. In **Overview**, turn forwarding on.
+5. On OnePlus/OxygenOS, allow background activity or auto launch **if your build offers those controls**. Some battery pages offer no controls; the app now shows the verified exemption and service state directly. Search system Settings for **Sleep standby optimization** and check whether it is reducing notifications. Do not change undocumented AOD settings.
+6. In **Overview**, turn forwarding on. Allow the status-notification permission when prompted, and check **Setup → Persistent forwarding → Service: running**. You can pause from the ongoing notification. Android can run the service when status notifications are denied, but its notification will be less visible.
 7. Lock the Android phone and receive a **new** message while its source app is in the background. Confirm the Pushover alert arrives before you unlock Android.
 
-After the check, **Setup → Connection check** shows the last capture and acceptance times and whether the screen was off/locked. These timestamps help distinguish a late listener callback from a late send. See [locked-phone troubleshooting](docs/TROUBLESHOOTING.md#notifications-wait-until-the-phone-is-unlocked).
+After the check, **Activity → Show delivery timing** gives the exact Android post, listener arrival, first/latest send attempt, and completion times, with AOD/screen state. **Setup → Recent listener events** also records skipped summaries, ongoing alerts, and cases where Android exposes no message text. See [locked-phone troubleshooting](docs/TROUBLESHOOTING.md#notifications-wait-until-the-phone-is-unlocked).
 
 ### 3. Finish on iPhone and Apple Watch
 
@@ -89,7 +90,7 @@ After the check, **Setup → Connection check** shows the last capture and accep
 
 ## Privacy and delivery behaviour
 
-Credentials and pending message payloads are encrypted using AES-GCM with an Android Keystore key. App backup and device transfer are disabled. Completed history contains the source app, timestamp, and status, without notification titles or bodies. Connection diagnostics retain the latest capture/acceptance times and a screen-off/locked flag only. Screenshots and recent-app previews are protected in the production app.
+Credentials and pending message payloads are encrypted using AES-GCM with an Android Keystore key. App backup and device transfer are disabled. Completed history contains the source app, timestamp, and status, without notification titles or bodies. Connection diagnostics retain post/receive/send times, display/power state, attempt counts, and metadata about the last 20 eligible-source listener callbacks. They contain no message titles, bodies, or Pushover keys. Screenshots and recent-app previews are protected in the production app.
 
 Forwarded text is sent directly to Pushover over HTTPS. **This integration is not end-to-end encrypted with Pushover**: Pushover can process the forwarded content. There is no NotiPush server, analytics SDK, or advertising SDK.
 
@@ -105,11 +106,17 @@ Forwarded text is sent directly to Pushover over HTTPS. **This integration is no
 
 Pausing forwarding, disabling an app, or changing the destination cancels the corresponding queued messages. A request already in flight may still arrive. Failed payloads are erased and cannot be replayed from history. If a network response is lost after Pushover accepts a request, a retry can produce a duplicate.
 
+### Names for cloned apps
+
+OxygenOS copies can share one package name while running in different Android profiles. NotiPush treats them as separate sources. On the tested OxygenOS 16 build, the clone-alias service requires the system-only `com.oplus.permission.safe.PROTECT` permission, so a normal APK cannot read those custom names through that service. The automatic lookup falls back to a profile identifier.
+
+In **Apps**, select each copy and set **Forwarded app name**, for example **WhatsApp SG** or **WhatsApp 2**, alongside its independent filters. Names are saved configuration on your phone; no account names are built into the app. Leave this blank to use the name Android exposes, with a profile suffix when needed. A restricted clone may appear after its first notification. Existing package-only rules provide a migration fallback.
+
 ### Delivery while locked
 
 Version 1.0.2 sent every notification through WorkManager. Android can defer scheduled work during sleep, so successful foreground delivery did not prove locked-phone delivery.
 
-Version 1.0.3 persists each message, registers its retry fallback, and immediately attempts HTTPS from the notification callback's background pipeline. Short partial wake locks cover capture and sending; each lock has a 45-second safety timeout and is released after use. A shared delivery lock prevents the live path and retry worker from posting the same queued message concurrently. WorkManager handles persistent retries, starting no earlier than 45 seconds after capture.
+Version 1.0.4 retains the immediate delivery path added in 1.0.3 and adds a persistent `remoteMessaging` foreground service for cross-device text forwarding. The listener takes a short CPU wake lock before decryption/parsing and hands off capture and HTTPS work without waiting for a scheduled job. Existing pending messages are also attempted when the service starts. Short partial wake locks cover capture and sending; each lock has a 45-second safety timeout and is released after use. A shared delivery lock prevents the live path and retry worker from posting the same queued message concurrently. WorkManager handles persistent retries, starting no earlier than 45 seconds after capture.
 
 **The battery exemption still matters:** a wake lock alone does not grant network access in deep Doze. NotiPush requests the exemption only when you tap the setup button. Android documents notification/task automation among the relevant use cases. See [Android's Doze guidance](https://developer.android.com/training/monitoring-device-state/doze-standby#support_for_other_use_cases).
 
@@ -144,15 +151,19 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Debug a
 
 The script creates a local signing key once in `~/.local/share/notipush/signing/`, outside the repository, and reuses it for later updates. **Keep a secure backup of this directory.** Set `NOTIPUSH_SIGNING_DIR` to use a different private location. OpenSSL, `keytool`, and `shasum` must be available.
 
-The output is `dist/NotiPush-1.0.3.apk` and `dist/SHA256SUMS`. Before copying the APK, the script verifies its v2/v3 signatures, production manifest, ZIP integrity, ARM64 support, 16 KB alignment, and the reflective constructors in the minified DEX.
+The output is `dist/NotiPush-1.0.4.apk` and `dist/SHA256SUMS`. Before copying the APK, the script verifies its v2/v3 signatures, production manifest, ZIP integrity, ARM64 support, 16 KB alignment, and the reflective constructors in the minified DEX.
 
 Verify the installed **release** as well:
 
 ```sh
-python3 scripts/smoke-release.py --serial YOUR_DEVICE --expected-version 1.0.3
+python3 scripts/smoke-release.py --serial YOUR_DEVICE --expected-version 1.0.4
 ```
 
 This preserves app data, performs two cold starts, checks that each process survives for 15 seconds, verifies the main navigation, and checks for new crashes. Keep the app in the foreground during the check.
+
+For a read-only power-state snapshot, use `python3 scripts/diagnose-background.py --serial YOUR_DEVICE`. Add `--app-report` **after** a delivery test to retrieve metadata from the running service. This invokes app dump code, so do not poll it during an unattended test. Reports exclude keys and notification text; keep the remaining device metadata private.
+
+The current physical AOD evidence is **one manually generated WhatsApp notification**, accepted by Pushover about **745 ms** after Android posted it. See [verification scope](docs/VERIFICATION.md) for completed checks and untested scenarios.
 
 ## Project structure
 
@@ -164,6 +175,7 @@ This preserves app data, performs two cold starts, checks that each process surv
 | `scripts/build-release.sh` | Signed APK creation and validation |
 | `scripts/verify-apk.py` | Packaging and minified-entry-point regression checks |
 | `scripts/smoke-release.py` | Installed release startup checks |
+| `scripts/diagnose-background.py` | Read-only AOD, idle, process, exemption, and optional app timing report |
 | `scripts/diagnose-install.py` | Device installation diagnostics; read-only unless `--try-install` is passed |
 | `docs/` | Troubleshooting, verification scope, and screenshots |
 

@@ -23,7 +23,7 @@ Tests and CI use synthetic notification text and mock API responses. The locked 
 
 - Describe the user-visible problem, resulting behaviour, and checks performed.
 - Add regression coverage for delivery, filtering, storage, concurrency, or lifecycle changes.
-- Test background/lifecycle changes with the phone locked as well as unlocked.
+- Test background/lifecycle changes with the phone locked as well as unlocked. Record plugged/unplugged state and avoid app-report polling during the measurement; instrumentation can affect process lifetime. Do not describe one message or a local mock test as a reliability test.
 - For shrinking or dependency changes, verify the signed, minified APK and run the release smoke check. Debug tests do not exercise R8's output.
 - Update the README and changelog when setup, supported versions, or delivery behaviour changes.
 

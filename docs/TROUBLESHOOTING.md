@@ -13,15 +13,16 @@ Save your Pushover destination, then tap **Send a test notification**. This test
 
 ## Notifications wait until the phone is unlocked
 
-Update to **1.0.3 or newer**, using the same signing identity. Keep the existing installation so your Pushover settings survive.
+Update to **1.0.4 or newer**, using the same signing identity. Keep the existing installation so your Pushover settings survive.
 
-The old delivery path relied entirely on WorkManager, which Android can defer during sleep. The updated app attempts delivery immediately and uses WorkManager for persistent retries. Network access during deep Doze also requires the battery exemption; a CPU wake lock alone is insufficient. [Android's explanation](https://developer.android.com/training/monitoring-device-state/doze-standby).
+Version 1.0.2 relied entirely on WorkManager, which Android can defer during sleep. Version 1.0.3 added immediate delivery but did not resolve the reported OnePlus AOD issue. Version 1.0.4 adds a persistent foreground messaging service and takes the CPU wake lock earlier in the callback. WorkManager remains the persistent retry fallback. Network access during deep Doze also requires the battery exemption; a CPU wake lock alone is insufficient. [Android's explanation](https://developer.android.com/training/monitoring-device-state/doze-standby).
 
 1. Open **Setup → Delivery while locked → Allow background delivery** and approve the Android prompt. Check that the row reports **Battery optimization exemption granted**.
-2. On OnePlus/OxygenOS, allow background activity in **App info → Battery usage**. Enable auto launch if available. Menu names vary; an app battery mode called **Unrestricted** may coexist with Android's optimization exemption, so check the green status inside NotiPush too.
-3. Confirm notification access, source selection, filters, and forwarding are enabled.
-4. Lock Android, receive a new notification from a selected app, and check Pushover **before** unlocking Android. Avoid keeping the source conversation open on another device if that suppresses phone notifications.
-5. Unlock Android and inspect **Setup → Connection check** and **Activity**.
+2. Check **Setup → Persistent forwarding → Service: running**. Allow the status-notification permission so the ongoing notification is visible.
+3. On OnePlus/OxygenOS, use background activity or auto launch controls only if your build offers them. If its battery page has no controls, return to NotiPush rather than repeatedly opening that page. Check **Sleep standby optimization** in system Settings; it may reduce notification frequency.
+4. Confirm notification access, source selection, filters, and forwarding are enabled.
+5. Lock Android, receive a new notification from a selected app, and check Pushover **before** unlocking Android. Avoid keeping the source conversation open on another device if that suppresses phone notifications.
+6. After the test, inspect **Activity → Show delivery timing** and **Setup → Recent listener events**.
 
 | Observation | Meaning / next step |
 | --- | --- |
@@ -32,7 +33,25 @@ The old delivery path relied entirely on WorkManager, which Android can defer du
 
 The timestamps describe the latest eligible captured notification and the latest accepted request; accepted requests include manual tests. They do not prove that a specific iPhone/Watch displayed an alert. Android may redact sensitive notification text and work-profile policy can block access.
 
-Physical OnePlus verification of this update remains a manual check. The automated test exercises a real system listener with the screen off and forced deep Doze, using a local HTTPS mock instead of real Pushover credentials. See [verification scope](VERIFICATION.md).
+A single real WhatsApp notification has been verified on AOD on a OnePlus 13R with 1.0.4. Repeated, long-idle, unplugged, and all-source physical tests remain outstanding. The automated test uses instrumentation inside the app, a real listener, forced deep Doze, and a local HTTPS mock; instrumentation can influence process lifetime. See [verification scope](VERIFICATION.md).
+
+## Clone names show a profile number
+
+The tested OxygenOS 16 build protects its App Cloner alias service with `com.oplus.permission.safe.PROTECT`, a signature/privileged permission. Notification access does not grant that permission. A profile suffix is therefore the safe fallback when the OS does not expose the custom label.
+
+Open **Apps**, tap the individual copy, enter **Forwarded app name**, and save. This is local configuration per profile, not an account-name constant in the APK. It affects future notifications; already delivered Pushover titles are unchanged. WhatsApp Business is no longer a starter entry.
+
+## Collect AOD diagnostics
+
+```sh
+# Read-only OS state: AOD/display, idle, app process, app-ops, and exemption.
+python3 scripts/diagnose-background.py --serial YOUR_DEVICE
+
+# After the test, include the app's metadata-only timing report.
+python3 scripts/diagnose-background.py --serial YOUR_DEVICE --app-report
+```
+
+The optional app report invokes service dump code and must not be polled to prove unattended delivery. For an unplugged test, use paired wireless debugging or reconnect USB only after observing whether the receiving device got the alert. USB charging and ADB observation can change the phone's power state. Default reports are written privately outside the repository. For a custom output path, use the ignored `diagnostics/` directory and review metadata before sharing.
 
 ## Notification access is restricted
 

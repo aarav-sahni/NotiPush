@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.4 — 2026-10-29
+
+- Added a persistent foreground messaging service with an ongoing status and Pause action.
+- Added earlier CPU wake-lock coverage and immediate recovery of pending rows when the service starts.
+- Replaced the settings-list notification-access check with Android’s authoritative component-access API.
+- Added per-delivery post/receive/attempt/completion timing, AOD/power states, and metadata-only listener observations.
+- Added protected Android service-dump diagnostics and a read-only background-state helper.
+- Made sources profile-aware so OxygenOS WhatsApp clones use separate labels, filters, and queues.
+- Added best-effort OxygenOS clone-name lookup, observed-clone discovery, and per-copy name overrides. The tested ROM restricts its alias service to privileged callers, so custom names need configuration.
+- Removed WhatsApp Business from the starter list and explicit package queries.
+- Preserved encrypted settings, queued payloads, and deduplication across the schema update.
+
 ## 1.0.3 — 2026-10-29
 
 - Added immediate forwarding from the notification listener instead of waiting for a scheduled job.

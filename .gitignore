@@ -3,6 +3,10 @@
 **/build/
 local.properties
 .idea/
+.vscode/
+.cxx/
+.externalNativeBuild/
+/out/
 *.iml
 *.jks
 *.keystore
@@ -18,9 +22,21 @@ captures/
 *.apks
 *.idsig
 *.hprof
+*.jfr
+*.heapdump
 *.log
 /diagnostics/
 *install-report*.json
+notipush-background-*.json
+*background-report*.json
+
+# Runtime databases can contain notification metadata and encrypted pending messages.
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # Credentials and private signing material.
 .env
@@ -33,3 +49,7 @@ signing/
 *.pem
 *.key
 *.p8
+store-password
+adbkey
+adbkey.pub
+adb_known_hosts.pb
